@@ -92,14 +92,15 @@ esp_err_t bsp_lvgl_start(void)
     ESP_RETURN_ON_ERROR(esp_lcd_dpi_panel_register_event_callbacks(panel, &cbs, disp),
                         TAG, "register DPI callbacks failed");
 
-    if (bsp_touch_init() == ESP_OK) {
-        lv_indev_t *indev = lv_indev_create();
-        lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-        lv_indev_set_display(indev, disp);
-        lv_indev_set_read_cb(indev, lvgl_touch_cb);
-    } else {
-        ESP_LOGW(TAG, "continuing without touch");
+    /* The input device is created even if no touch answered yet: bsp_touch_read
+     * keeps looking for a controller that comes up late. */
+    if (bsp_touch_init() != ESP_OK) {
+        ESP_LOGW(TAG, "no touch controller yet; will keep probing");
     }
+    lv_indev_t *indev = lv_indev_create();
+    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_display(indev, disp);
+    lv_indev_set_read_cb(indev, lvgl_touch_cb);
 
     bsp_display_brightness_set(100);
     return ESP_OK;

@@ -8,8 +8,8 @@
 #pragma once
 
 #if !defined(BSP_BOARD_WAVESHARE_4B) && !defined(BSP_BOARD_M5STACK_TAB5)
-#define BSP_BOARD_WAVESHARE_4B
-// #define BSP_BOARD_M5STACK_TAB5
+// #define BSP_BOARD_WAVESHARE_4B
+#define BSP_BOARD_M5STACK_TAB5
 #endif
 
 #if defined(BSP_BOARD_WAVESHARE_4B) && defined(BSP_BOARD_M5STACK_TAB5)

@@ -211,6 +211,9 @@ static void build_dialog(void)
     lv_obj_set_style_bg_color(kb, C_CARD, LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(kb, C_ACCENT, LV_PART_ITEMS | LV_STATE_PRESSED);
     lv_obj_set_style_text_color(kb, C_TEXT, LV_PART_ITEMS);
+    /* control keys (backspace, ABC/abc, OK, arrows) are CHECKED buttons, and the light
+     * theme's checked-key style sets near-black text: override it for that state too */
+    lv_obj_set_style_text_color(kb, C_TEXT, LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_text_font(kb, &lv_font_montserrat_22, LV_PART_ITEMS);
     lv_obj_set_style_radius(kb, 10, LV_PART_ITEMS);
     lv_obj_set_style_shadow_width(kb, 0, LV_PART_ITEMS);

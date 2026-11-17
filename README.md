@@ -60,7 +60,7 @@ The panel is detected at boot on both boards. Select the board in `src/bsp/bsp_c
    | Chip Variant          | Match your chip (most 4B boards are pre-v3.00) |
    | USB Mode              | USB-OTG (TinyUSB) (required for the USB drive) |
    | USB CDC/MSC On Boot   | Disabled                                  |
-
+                                                                                                                                            
 5. Open `esp32p4_86box.ino` and upload. On the 4B, serial output (115200 baud) goes to the USB-UART port.
 
 ## SD card layout

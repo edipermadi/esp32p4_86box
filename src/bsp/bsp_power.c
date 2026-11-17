@@ -17,6 +17,8 @@
  * than by driving it high.
  */
 #include "bsp_board.h"
+#include <stdarg.h>
+#include <stdio.h>
 #include "esp_check.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
@@ -26,6 +28,18 @@
 static const char *TAG = "bsp_power";
 
 static i2c_master_bus_handle_t s_bus = NULL;
+static char s_diag[BSP_DIAG_SLOTS][96];
+
+void bsp_diag_note(int slot, const char *fmt, ...)
+{
+    if (slot < 0 || slot >= BSP_DIAG_SLOTS) {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_diag[slot], sizeof(s_diag[slot]), fmt, ap);
+    va_end(ap);
+}
 
 #if defined(BSP_BOARD_M5STACK_TAB5)
 #define PI4IO_ADDR_E1      0x43
@@ -62,9 +76,13 @@ static esp_err_t tab5_power_init(void)
     cfg.device_address = PI4IO_ADDR_E2;
     ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_bus, &cfg, &s_e2), TAG, "add E2");
 
-    uint8_t reg = PI4IO_REG_ID, id = 0;
-    ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(s_e1, &reg, 1, &id, 1, 50), TAG,
-                        "I/O expander 0x43 not responding (is this a Tab5?)");
+    uint8_t reg = PI4IO_REG_ID, id = 0, id2 = 0;
+    esp_err_t e = i2c_master_transmit_receive(s_e1, &reg, 1, &id, 1, 50);
+    i2c_master_transmit_receive(s_e2, &reg, 1, &id2, 1, 50);
+    if (e != ESP_OK) {
+        bsp_diag_note(BSP_DIAG_POWER, "I/O expander 0x43 not responding: %s", esp_err_to_name(e));
+        return e;
+    }
     ESP_LOGI(TAG, "PI4IOE5V6408 id 0x%02x", id);
 
     /* TP_INT high while the touch controller comes out of reset */
@@ -96,6 +114,8 @@ static esp_err_t tab5_power_init(void)
     r |= pi4io_wr(s_e1, PI4IO_REG_IO_DIR, 0x6F);
     s_e1_out = 0x64;                                 /* P2 EXT5V, P5 TP_RST, P6 CAM_RST */
     r |= pi4io_wr(s_e1, PI4IO_REG_OUT, s_e1_out);
+    bsp_diag_note(BSP_DIAG_POWER, "expanders 0x43 id %02x, 0x44 id %02x, setup %s",
+                  id, id2, r == ESP_OK ? "ok" : "FAILED");
     ESP_RETURN_ON_FALSE(r == ESP_OK, ESP_FAIL, TAG, "I/O expander setup failed");
 
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -149,4 +169,33 @@ void bsp_audio_amp_set(bool on)
     s_e1_out = on ? (s_e1_out | E1_SPK_EN) : (s_e1_out & ~E1_SPK_EN);
     pi4io_wr(s_e1, PI4IO_REG_OUT, s_e1_out);
 #endif
+}
+
+size_t bsp_diag_report(char *buf, size_t len)
+{
+    size_t n = 0;
+#define ADD(...) do { if (n < len) { int k = snprintf(buf + n, len - n, __VA_ARGS__); if (k > 0) n += (size_t)k; } } while (0)
+    ADD("[diag] board: %s, %dx%d\r\n", BSP_BOARD_NAME, BSP_LCD_H_RES, BSP_LCD_V_RES);
+    ADD("[diag] power: %s\r\n", s_diag[BSP_DIAG_POWER][0] ? s_diag[BSP_DIAG_POWER] : "(n/a)");
+    ADD("[diag] panel: %s -> %s\r\n", s_diag[BSP_DIAG_PANEL][0] ? s_diag[BSP_DIAG_PANEL] : "(n/a)",
+        bsp_display_panel_name());
+    ADD("[diag] touch: %s\r\n", s_diag[BSP_DIAG_TOUCH][0] ? s_diag[BSP_DIAG_TOUCH] : "(n/a)");
+    if (n < len) {
+        n += bsp_touch_diag(buf + n, len - n);
+    }
+    ADD("[diag] i2c port %d (SDA %d, SCL %d):", BSP_I2C_PORT, BSP_I2C_SDA_GPIO, BSP_I2C_SCL_GPIO);
+    if (s_bus) {
+        int found = 0;
+        for (uint16_t a = 0x08; a < 0x78; a++) {
+            if (i2c_master_probe(s_bus, a, 10) == ESP_OK) {
+                ADD(" %02X", a);
+                found++;
+            }
+        }
+        ADD(found ? "\r\n" : " nothing answers\r\n");
+    } else {
+        ADD(" bus not created\r\n");
+    }
+#undef ADD
+    return n < len ? n : len;
 }

@@ -112,6 +112,16 @@ esp_err_t bsp_i2c_init(i2c_master_bus_handle_t *ret_bus);
 /* Speaker amplifier on/off (GPIO on the 4B, I/O expander on the Tab5). */
 void bsp_audio_amp_set(bool on);
 
+/* Bring-up diagnostics: a multi-line text report (power, panel detection, touch
+ * state and counters, I2C bus scan). Meant to be printed periodically, since the
+ * USB serial port drops on reset and boot messages are missed. */
+size_t bsp_diag_report(char *buf, size_t len);
+/* Used by the BSP modules to record what they found. */
+enum { BSP_DIAG_POWER, BSP_DIAG_PANEL, BSP_DIAG_TOUCH, BSP_DIAG_SLOTS };
+void bsp_diag_note(int slot, const char *fmt, ...);
+/* Appends the touch driver's live state; called by bsp_diag_report. */
+size_t bsp_touch_diag(char *buf, size_t len);
+
 /* Powers the D-PHY, brings up the DSI link, detects which panel is fitted and
  * initialises it. Backlight is left off. */
 esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel);

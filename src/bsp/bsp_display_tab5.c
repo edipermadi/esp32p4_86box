@@ -7,12 +7,13 @@
  *   0x55, firmware version 1     -> ST7121
  *   0x55, other firmware version -> ST7123
  * If no touch answers, the ILI9881C ID (page 1, regs 00/01 = 98 81) is read
- * over DSI; failing that, ILI9881C is assumed.
+ * over DSI; failing that, ST7123 (the panel in current production) is assumed.
  *
  * Panel power and LCD_RST are handled by the I/O expander sequence in
  * bsp_power.c (run by bsp_i2c_init). The steps before and after each init table
  * follow what M5Stack's drivers do (esp_lcd_ili9881c, esp_lcd_st7123,
- * esp_lcd_st7121); timings and lane rates are from M5Tab5-UserDemo's BSP.
+ * esp_lcd_st7121). Timings and lane rates are M5GFX's (specs::tab5): the older
+ * M5Tab5-UserDemo values (ILI9881C at 60 MHz = ~48 Hz refresh) flickered.
  */
 #include "bsp_board.h"
 #if defined(BSP_BOARD_M5STACK_TAB5)
@@ -61,6 +62,7 @@ static bsp_panel_kind_t probe_by_touch(void)
     for (int tries = 0; tries < 30; tries++) {          /* up to ~0.6 s after power-up */
         if (i2c_master_probe(bus, 0x14, 20) == ESP_OK || i2c_master_probe(bus, 0x5D, 20) == ESP_OK) {
             ESP_LOGI(TAG, "GT911 touch -> ILI9881C panel");
+            bsp_diag_note(BSP_DIAG_PANEL, "GT911 touch answered (try %d)", tries + 1);
             return BSP_PANEL_ILI9881C;
         }
         if (i2c_master_probe(bus, 0x55, 20) == ESP_OK) {
@@ -77,6 +79,7 @@ static bsp_panel_kind_t probe_by_touch(void)
                 i2c_master_bus_rm_device(dev);
             }
             ESP_LOGI(TAG, "ST712x touch, fw %u -> %s panel", fw, fw == 1 ? "ST7121" : "ST7123");
+            bsp_diag_note(BSP_DIAG_PANEL, "touch 0x55 answered (try %d), fw %u", tries + 1, fw);
             return fw == 1 ? BSP_PANEL_ST7121 : BSP_PANEL_ST7123;
         }
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -84,9 +87,8 @@ static bsp_panel_kind_t probe_by_touch(void)
     return BSP_PANEL_UNKNOWN;
 }
 
-static bool ili9881c_id_ok(esp_lcd_panel_io_handle_t io)
+static bool ili9881c_id_ok(esp_lcd_panel_io_handle_t io, uint8_t id[2])
 {
-    uint8_t id[2] = {0};
     esp_lcd_panel_io_tx_param(io, 0xFF, (uint8_t[]){0x98, 0x81, 0x01}, 3);
     esp_lcd_panel_io_rx_param(io, 0x00, &id[0], 1);
     esp_lcd_panel_io_rx_param(io, 0x01, &id[1], 1);
@@ -112,6 +114,38 @@ static esp_err_t send_init_cmds(esp_lcd_panel_io_handle_t io, const lcd_init_cmd
 
 #define N(a) (sizeof(a) / sizeof((a)[0]))
 
+static uint32_t lane_mbps_for(bsp_panel_kind_t kind)
+{
+    return kind == BSP_PANEL_ST7121 ? 900 : 1040;
+}
+
+static esp_err_t open_dsi(bsp_panel_kind_t kind, esp_lcd_dsi_bus_handle_t *bus, esp_lcd_panel_io_handle_t *io)
+{
+    esp_lcd_dsi_bus_config_t bus_cfg = {
+        .bus_id = 0,
+        .num_data_lanes = BSP_LCD_DSI_LANES,
+#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
+        /* Pre-v3 silicon: _DEFAULT is XTAL, which only v3+ supports -> abort() */
+        .phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT_LEGACY,
+#else
+        .phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT,
+#endif
+        .lane_bit_rate_mbps = lane_mbps_for(kind),
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_cfg, bus), TAG, "DSI bus failed");
+    esp_lcd_dbi_io_config_t dbi_cfg = {
+        .virtual_channel = 0,
+        .lcd_cmd_bits = 8,
+        .lcd_param_bits = 8,
+    };
+    esp_err_t err = esp_lcd_new_panel_io_dbi(*bus, &dbi_cfg, io);
+    if (err != ESP_OK) {
+        esp_lcd_del_dsi_bus(*bus);
+        *bus = NULL;
+    }
+    return err;
+}
+
 esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel)
 {
     ESP_RETURN_ON_FALSE(ret_panel, ESP_ERR_INVALID_ARG, TAG, "null arg");
@@ -136,7 +170,25 @@ esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel)
     };
     ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_cfg, &ldo), TAG, "LDO acquire failed");
 
-    /* 2. Per-panel link + video timing */
+    /* 2. DSI bus + DBI command interface (lane rate depends on the panel) */
+    esp_lcd_dsi_bus_handle_t dsi_bus = NULL;
+    esp_lcd_panel_io_handle_t io = NULL;
+    ESP_RETURN_ON_ERROR(open_dsi(s_panel_kind, &dsi_bus, &io), TAG, "DSI");
+    if (guessed) {
+        uint8_t id[2] = {0};
+        if (ili9881c_id_ok(io, id)) {
+            bsp_diag_note(BSP_DIAG_PANEL, "no touch answered; ILI9881C ID 98 81 read over DSI");
+        } else {
+            bsp_diag_note(BSP_DIAG_PANEL, "no touch answered; ILI ID %02X %02X -> assuming ST7123",
+                          id[0], id[1]);
+            s_panel_kind = BSP_PANEL_ST7123;
+            esp_lcd_panel_io_del(io);
+            esp_lcd_del_dsi_bus(dsi_bus);
+            ESP_RETURN_ON_ERROR(open_dsi(s_panel_kind, &dsi_bus, &io), TAG, "DSI");
+        }
+    }
+
+    /* 3. Per-panel video timing (M5GFX specs::tab5) */
     esp_lcd_dpi_panel_config_t dpi_cfg = {
         .virtual_channel = 0,
         .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
@@ -149,20 +201,17 @@ esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel)
         },
         .flags.use_dma2d = true,
     };
-    uint32_t lane_mbps;
     switch (s_panel_kind) {
     case BSP_PANEL_ST7123:
-        lane_mbps = 965;
-        dpi_cfg.dpi_clock_freq_mhz = 70;
+        dpi_cfg.dpi_clock_freq_mhz = 80;
         dpi_cfg.video_timing.hsync_pulse_width = 2;
         dpi_cfg.video_timing.hsync_back_porch = 40;
         dpi_cfg.video_timing.hsync_front_porch = 40;
-        dpi_cfg.video_timing.vsync_pulse_width = 2;
+        dpi_cfg.video_timing.vsync_pulse_width = 2;     /* back + pulse must stay 10 (M5 note) */
         dpi_cfg.video_timing.vsync_back_porch = 8;
         dpi_cfg.video_timing.vsync_front_porch = 220;   /* shorter stops the touch (M5 note) */
         break;
     case BSP_PANEL_ST7121:
-        lane_mbps = 900;
         dpi_cfg.dpi_clock_freq_mhz = 70;
         dpi_cfg.video_timing.hsync_pulse_width = 2;
         dpi_cfg.video_timing.hsync_back_porch = 40;
@@ -172,8 +221,7 @@ esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel)
         dpi_cfg.video_timing.vsync_front_porch = 200;
         break;
     default: /* ILI9881C */
-        lane_mbps = 730;
-        dpi_cfg.dpi_clock_freq_mhz = 60;
+        dpi_cfg.dpi_clock_freq_mhz = 80;
         dpi_cfg.video_timing.hsync_pulse_width = 40;
         dpi_cfg.video_timing.hsync_back_porch = 140;
         dpi_cfg.video_timing.hsync_front_porch = 40;
@@ -181,33 +229,6 @@ esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel)
         dpi_cfg.video_timing.vsync_back_porch = 20;
         dpi_cfg.video_timing.vsync_front_porch = 20;
         break;
-    }
-
-    /* 3. DSI bus + DBI command interface */
-    esp_lcd_dsi_bus_handle_t dsi_bus = NULL;
-    esp_lcd_dsi_bus_config_t bus_cfg = {
-        .bus_id = 0,
-        .num_data_lanes = BSP_LCD_DSI_LANES,
-#if CONFIG_ESP32P4_SELECTS_REV_LESS_V3
-        /* Pre-v3 silicon: _DEFAULT is XTAL, which only v3+ supports -> abort() */
-        .phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT_LEGACY,
-#else
-        .phy_clk_src = MIPI_DSI_PHY_PLLREF_CLK_SRC_DEFAULT,
-#endif
-        .lane_bit_rate_mbps = lane_mbps,
-    };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_cfg, &dsi_bus), TAG, "DSI bus failed");
-
-    esp_lcd_panel_io_handle_t io = NULL;
-    esp_lcd_dbi_io_config_t dbi_cfg = {
-        .virtual_channel = 0,
-        .lcd_cmd_bits = 8,
-        .lcd_param_bits = 8,
-    };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_dbi(dsi_bus, &dbi_cfg, &io), TAG, "DBI IO failed");
-
-    if (guessed && !ili9881c_id_ok(io)) {
-        ESP_LOGW(TAG, "ILI9881C ID not read back either; trying ILI9881C anyway");
     }
 
     esp_lcd_panel_handle_t panel = NULL;
