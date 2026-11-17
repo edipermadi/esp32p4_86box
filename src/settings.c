@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "bsp/bsp_config.h"
 #include "mp3_player.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -18,7 +19,11 @@ void settings_load(player_settings_t *s)
     s->waterfall = false;
     s->timeout_min = 5;
     s->clock24 = true;
+#if defined(BSP_BOARD_M5STACK_TAB5)
+    s->usb_drive = false;   /* on the Tab5 the drive takes over USB-C (serial + upload) */
+#else
     s->usb_drive = true;
+#endif
     s->gallery_random = false;
     s->rotation = 0;
     strcpy(s->tz, "UTC");

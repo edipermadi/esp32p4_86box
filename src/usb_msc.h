@@ -6,8 +6,10 @@
 extern "C" {
 #endif
 
-/* Exposes the microSD card as a USB mass-storage drive on the USB OTG
- * (high-speed) port. Requires Tools > USB Mode = "USB-OTG (TinyUSB)".
+/* Exposes the microSD card as a USB mass-storage drive. Waveshare 4B: on the
+ * USB OTG (high-speed) port (usb_msc.cpp). M5Stack Tab5: on the USB-C socket,
+ * which is the serial port while the drive is off (usb_msc_tab5.c).
+ * Requires Tools > USB Mode = "USB-OTG (TinyUSB)".
  * The firmware also reads the card (music player); see bsp_sdcard.c for how
  * the two share it.
  * Returns an error (and starts nothing) if no card is inserted at boot. */

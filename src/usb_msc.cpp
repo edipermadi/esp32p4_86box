@@ -2,6 +2,8 @@
  * microSD card -> USB mass storage, using the Arduino core's TinyUSB USBMSC class.
  * TinyUSB on the P4 runs on the OTG high-speed controller (rhport 1).
  */
+#include "bsp/bsp_config.h"
+#if !defined(BSP_BOARD_M5STACK_TAB5)       /* the Tab5 uses usb_msc_tab5.c */
 #include "usb_msc.h"
 #include "bsp/bsp_board.h"
 #include "USB.h"
@@ -106,3 +108,5 @@ extern "C" usb_msc_state_t usb_msc_state(void)
 {
     return s_state;
 }
+
+#endif /* !BSP_BOARD_M5STACK_TAB5 */

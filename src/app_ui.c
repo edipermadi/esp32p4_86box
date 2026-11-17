@@ -520,13 +520,23 @@ static void show_usb(void)
     const char *txt;
     lv_color_t c = C_MUTED;
     switch (st) {
+#if defined(BSP_BOARD_M5STACK_TAB5)
+    case USB_MSC_ON:      txt = "USB-C is the SD card drive. Eject it on the PC before switching off; "
+                                "off gives USB-C back to the serial port (log, upload)."; break;
+#else
     case USB_MSC_ON:      txt = "The SD card appears as a drive on a PC connected to the USB OTG port. "
                                 "Eject it on the PC before switching off."; break;
+#endif
     case USB_MSC_NO_CARD: txt = "No SD card found."; c = C_ORANGE; break;
     case USB_MSC_FAILED:  txt = "USB could not be started."; c = C_ORANGE; break;
     case USB_MSC_OFF:
+#if defined(BSP_BOARD_M5STACK_TAB5)
+    default:              txt = "Off: USB-C is the serial port. On: USB-C becomes the SD card drive "
+                                "(no serial log; upload after switching off)."; break;
+#else
     default:              txt = "Off: the SD card is only used by this device. "
                                 "Switching off re-reads the music list."; break;
+#endif
     }
     lv_label_set_text(s_usb_note, txt);
     lv_obj_set_style_text_color(s_usb_note, c, 0);
