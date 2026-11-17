@@ -1,4 +1,5 @@
-// Backlight on GPIO26: LEDC PWM, active low (GPIO33 is NC on this board - leave it alone).
+// Backlight: LEDC PWM on BSP_LCD_BACKLIGHT_GPIO (4B: GPIO26 active low, GPIO33 is NC - leave it alone;
+// Tab5: GPIO22 active high).
 #include <Arduino.h>
 #include "bsp_board.h"
 
@@ -10,7 +11,7 @@ extern "C" void bsp_display_brightness_set(int percent)
     static bool ready = false;
     if (!ready) {
         ready = ledcAttach(BSP_LCD_BACKLIGHT_GPIO, BL_FREQ_HZ, BL_RES_BITS) &&
-                ledcOutputInvert(BSP_LCD_BACKLIGHT_GPIO, true);
+                (!BSP_LCD_BACKLIGHT_INVERT || ledcOutputInvert(BSP_LCD_BACKLIGHT_GPIO, true));
         if (!ready) {
             return;
         }

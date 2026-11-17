@@ -10,8 +10,9 @@
  * (esp_lcd_st7703 vendor_specific_init_default, MIT / Apache-2.0, and
  *  waveshare_boards jd9365_720_720_init.h, Apache-2.0).
  */
-#include <string.h>
 #include "bsp_board.h"
+#if defined(BSP_BOARD_WAVESHARE_4B)
+#include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_ldo_regulator.h"
@@ -117,6 +118,15 @@ static bsp_panel_kind_t s_panel_kind = BSP_PANEL_UNKNOWN;
 static esp_lcd_panel_handle_t s_panel = NULL;
 
 bsp_panel_kind_t bsp_display_panel_kind(void) { return s_panel_kind; }
+
+const char *bsp_display_panel_name(void)
+{
+    switch (s_panel_kind) {
+    case BSP_PANEL_ST7703: return "ST7703";
+    case BSP_PANEL_JD9365: return "JD9365DA";
+    default:               return "unknown";
+    }
+}
 
 static void panel_hw_reset(void)
 {
@@ -274,3 +284,5 @@ esp_err_t bsp_display_new(esp_lcd_panel_handle_t *ret_panel)
     *ret_panel = panel;
     return ESP_OK;
 }
+
+#endif /* BSP_BOARD_WAVESHARE_4B */

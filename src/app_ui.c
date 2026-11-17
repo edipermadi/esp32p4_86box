@@ -829,9 +829,10 @@ static void build_settings(void)
 
     /* about */
     c = card(s_settings, "ABOUT");
-    kv_row(c, "Board", "ESP32-P4 4B");
-    kv_row(c, "Display", bsp_display_panel_kind() == BSP_PANEL_JD9365 ? "720x720 JD9365DA"
-                                                                    : "720x720 ST7703");
+    kv_row(c, "Board", BSP_BOARD_NAME);
+    char disp[40];
+    snprintf(disp, sizeof(disp), "%dx%d %s", BSP_LCD_H_RES, BSP_LCD_V_RES, bsp_display_panel_name());
+    kv_row(c, "Display", disp);
     s_info_tracks = kv_row(c, "Tracks on SD", "");
     s_info_ram = kv_row(c, "Internal RAM", "");
     s_info_psram = kv_row(c, "PSRAM", "");

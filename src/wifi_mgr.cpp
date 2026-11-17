@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <string.h>
 #include "nvs.h"
+#include "bsp/bsp_board.h"
 
 #define NS              "wifi"
 #define MAX_APS         32
@@ -121,6 +122,11 @@ static bool radio_up(void)
         return true;
     }
     set_state(WIFI_ST_STARTING);
+#ifdef BSP_HOSTED_SDIO_CLK
+    /* the C6's SDIO pins differ from the core's defaults on this board */
+    WiFi.setPins(BSP_HOSTED_SDIO_CLK, BSP_HOSTED_SDIO_CMD, BSP_HOSTED_SDIO_D0, BSP_HOSTED_SDIO_D1,
+                 BSP_HOSTED_SDIO_D2, BSP_HOSTED_SDIO_D3, BSP_HOSTED_RESET);
+#endif
     WiFi.persistent(false);                  /* credentials live in our own NVS keys */
     WiFi.onEvent(on_disconnect, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
     if (!WiFi.mode(WIFI_STA)) {              /* first call brings up ESP-Hosted / the C6 */

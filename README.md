@@ -1,6 +1,11 @@
 # esp32p4_86box
 
-A touch-screen music player and picture frame for the **Waveshare ESP32-P4-WIFI6-Touch-LCD-4B**: a 4" 720×720 MIPI-DSI panel with GT911 touch, an ES8311 speaker, microSD, and an ESP32-C6 for Wi-Fi. The UI is built with LVGL 9.6 as an Arduino sketch.
+A touch-screen music player and picture frame for ESP32-P4 boards with an ESP32-C6 for Wi-Fi:
+
+- **Waveshare ESP32-P4-WIFI6-Touch-LCD-4B**: 4" 720×720 MIPI-DSI panel, GT911 touch, ES8311 speaker, microSD.
+- **M5Stack Tab5**: 5" 720×1280 MIPI-DSI panel, ES8388 speaker, microSD.
+
+The UI is built with LVGL 9.6 as an Arduino sketch, on the bare esp32 Arduino core (no M5 or Waveshare libraries).
 
 ## Features
 
@@ -28,32 +33,35 @@ A touch-screen music player and picture frame for the **Waveshare ESP32-P4-WIFI6
 
 ## Hardware
 
-| Part      | Detail                                                        |
-|-----------|---------------------------------------------------------------|
-| Board     | Waveshare ESP32-P4-WIFI6-Touch-LCD-4B                         |
-| Display   | 720×720 MIPI-DSI IPS (ST7703 or JD9365, detected at boot)     |
-| Touch     | GT911                                                         |
-| Audio     | ES8311 codec + speaker amplifier                              |
-| Wi-Fi     | On-board ESP32-C6 via ESP-Hosted (SDIO)                       |
-| Storage   | microSD                                                       |
+| Part      | Waveshare 4B                                  | M5Stack Tab5                                              |
+|-----------|-----------------------------------------------|-----------------------------------------------------------|
+| Display   | 720×720 MIPI-DSI (ST7703 or JD9365)           | 720×1280 MIPI-DSI (ILI9881C, ST7123 or ST7121)            |
+| Touch     | GT911                                         | GT911 (ILI9881C panel) or built into ST7123/ST7121        |
+| Audio     | ES8311 codec + amplifier                      | ES8388 codec + amplifier                                  |
+| Power     | GPIOs                                         | Two PI4IOE5V6408 I/O expanders (resets, amp, C6 power)    |
+| Wi-Fi     | ESP32-C6 via ESP-Hosted (SDIO, core default pins) | ESP32-C6 via ESP-Hosted (SDIO on GPIO8–13, reset 15)  |
+| Storage   | microSD                                       | microSD                                                   |
+
+The panel is detected at boot on both boards. Select the board in `src/bsp/bsp_config.h`; the Waveshare 4B is the default.
 
 ## Building
 
 1. Install **esp32 Arduino core 3.3.x** in the Arduino IDE.
 2. Install **LVGL 9.6.0** through the Library Manager, then put `lv_conf.h` at `~/Arduino/libraries/lv_conf.h`. The Monitor page needs `LV_USE_PERF_MONITOR 1` in that file.
-3. Choose these settings in the Tools menu:
+3. Pick your board in `src/bsp/bsp_config.h`.
+4. Choose these settings in the Tools menu:
 
    | Setting               | Value                                     |
    |-----------------------|-------------------------------------------|
    | Board                 | ESP32P4 Dev Module                        |
    | PSRAM                 | Enabled (required)                        |
-   | Flash Size            | 32MB (256Mb)                              |
-   | Partition Scheme      | 32M Flash (13MB APP/6.75MB SPIFFS)        |
+   | Flash Size            | 16MB (128Mb), on both boards (the 4B's 32 MB chip works as 16 MB) |
+   | Partition Scheme      | Custom (uses `partitions.csv`: one 15.9 MB app, no OTA/filesystem) |
    | Chip Variant          | Match your chip (most 4B boards are pre-v3.00) |
    | USB Mode              | USB-OTG (TinyUSB) (required for the USB drive) |
    | USB CDC/MSC On Boot   | Disabled                                  |
 
-4. Open `esp32p4_86box.ino` and upload. Serial output (115200 baud) goes to the USB-UART port.
+5. Open `esp32p4_86box.ino` and upload. On the 4B, serial output (115200 baud) goes to the USB-UART port.
 
 ## SD card layout
 
@@ -67,7 +75,7 @@ A touch-screen music player and picture frame for the **Waveshare ESP32-P4-WIFI6
 | Path                     | Contents                                                       |
 |--------------------------|----------------------------------------------------------------|
 | `esp32p4_86box.ino`      | Startup: BSP, audio, USB drive, app UI, LVGL loop               |
-| `src/bsp/`               | Board support: display, touch, backlight, ES8311 audio, SD card, LVGL glue |
+| `src/bsp/`               | Board support: board selection (`bsp_config.h`), display, touch, backlight, power/I/O expanders, ES8311/ES8388 audio, SD card, LVGL glue |
 | `src/app_ui.*`           | Page shell: home page, settings, screen timeout, clock          |
 | `src/player_ui.*`, `src/mp3_player.*` | Player UI and playback engine                     |
 | `src/ogg_opus.*`, `src/opus/` | Ogg demuxer and vendored libopus decoder                  |
@@ -87,6 +95,7 @@ A touch-screen music player and picture frame for the **Waveshare ESP32-P4-WIFI6
 - [LVGL](https://lvgl.io) (MIT), installed separately
 - libopus 1.5.2 (BSD-3-Clause), vendored in `src/opus/`; see `src/opus/VENDORED.md`
 - stb_image v2.30 (public domain / MIT), in `src/third_party/`
+- M5Stack Tab5 panel init tables (Apache-2.0, from M5Stack's M5Tab5-UserDemo BSP components), in `src/bsp/bsp_tab5_panel_init.h`
 
 ## License
 

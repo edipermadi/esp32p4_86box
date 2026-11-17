@@ -1,13 +1,16 @@
 /*
- * MP3 player + SD-card USB drive + Wi-Fi (via the on-board ESP32-C6) on the Waveshare ESP32-P4-WIFI6-Touch-LCD-4B
- * (720x720 MIPI-DSI + GT911 touch, ES8311 speaker, microSD).
+ * MP3 player + SD-card USB drive + Wi-Fi (via the on-board ESP32-C6) for ESP32-P4 boards:
+ *   - Waveshare ESP32-P4-WIFI6-Touch-LCD-4B (720x720 MIPI-DSI + GT911, ES8311 speaker, microSD)
+ *   - M5Stack Tab5 (720x1280 MIPI-DSI, ES8388 speaker, microSD)
+ * Select the board in src/bsp/bsp_config.h.
  *
- * Arduino IDE settings (Tools menu):
+ * Arduino IDE settings (Tools menu), both boards:
  *   Board:            ESP32P4 Dev Module (esp32 core 3.3.x)
  *   PSRAM:            Enabled                 <- required
- *   Flash Size:       32MB (256Mb)
- *   Partition Scheme: 32M Flash (13MB APP/6.75MB SPIFFS)   <- room for Wi-Fi (app was 2.3 MB before it)
- *   Chip Variant:     match your chip (most 4B boards ship pre-v3.00 silicon)
+ *   Flash Size:       16MB (128Mb)          <- Tab5 has 16 MB; the 4B's 32 MB chip runs fine as 16 MB
+ *   Partition Scheme: Custom   <- partitions.csv in this folder (15.9 MB app) is used for every build;
+ *                                 "Custom" just makes the IDE's size check allow it
+ *   Chip Variant:     match your chip (most 4B boards ship pre-v3.00 silicon; check your Tab5's)
  *   USB Mode:         USB-OTG (TinyUSB)       <- required for the SD-card USB drive
  *   USB CDC/MSC On Boot: Disabled (Serial stays on the USB-UART port)
  *
@@ -28,14 +31,14 @@ void setup()
 {
   Serial.begin(115200);
   delay(500);
-  Serial.println("ESP32-P4-WIFI6-Touch-LCD-4B MP3 player");
+  Serial.println(BSP_BOARD_NAME " MP3 player");
 
   esp_err_t err = bsp_lvgl_start();
   if (err != ESP_OK) {
     Serial.printf("BSP init failed: %s\n", esp_err_to_name(err));
     while (true) delay(1000);
   }
-  Serial.printf("Panel: %s\n", bsp_display_panel_kind() == BSP_PANEL_JD9365 ? "JD9365DA" : "ST7703");
+  Serial.printf("Panel: %s\n", bsp_display_panel_name());
 
   /* Speaker on (silent). The MP3 player re-clocks it per file. */
   err = bsp_audio_init(44100);

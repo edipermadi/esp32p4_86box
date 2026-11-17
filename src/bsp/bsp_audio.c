@@ -1,15 +1,11 @@
 /*
- * Speaker output: ES8311 codec (I2C 0x18 on the shared GPIO7/8 bus) fed by
- * I2S0, followed by an NS4150 class-D amp enabled on GPIO53 (active high).
- *
- * Pins and amp polarity come from Waveshare's esp32_p4_wifi6_touch_lcd_4b BSP.
- * The register sequence is a DAC-only, slave-mode subset of Espressif's
- * esp_codec_dev ES8311 driver (Apache-2.0); the Arduino core does not ship it.
+ * Speaker output: I2S0 (TX only, 16-bit stereo, MCLK = 256 fs) into the board's
+ * codec (ES8311 on the 4B, ES8388 on the Tab5, see bsp_codec_*.c), followed by
+ * a class-D amp switched by bsp_audio_amp_set().
  */
-#include "bsp_board.h"
+#include "bsp_codec.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,38 +13,14 @@
 
 static const char *TAG = "bsp_audio";
 
-#define ES8311_ADDR        0x18      /* CE pin low */
-#define ES8311_I2C_HZ      100000
 #define AUDIO_MCLK_MULT    I2S_MCLK_MULTIPLE_256
 
 static i2s_chan_handle_t s_tx = NULL;
-static i2c_master_dev_handle_t s_codec = NULL;
+static bool s_codec_ok = false;
 static SemaphoreHandle_t s_owner = NULL;   /* one audio producer at a time (the MP3 player) */
 static uint32_t s_rate = 0;
 
-/* ---------------------------------------------------------------- ES8311 */
-static esp_err_t es_wr(uint8_t reg, uint8_t val)
-{
-    uint8_t buf[2] = { reg, val };
-    return i2c_master_transmit(s_codec, buf, sizeof(buf), 100);
-}
-
-static esp_err_t es_rd(uint8_t reg, uint8_t *val)
-{
-    return i2c_master_transmit_receive(s_codec, &reg, 1, val, 1, 100);
-}
-
-/* Read-modify-write: reg = (reg & keep) | set */
-static esp_err_t es_rmw(uint8_t reg, uint8_t keep, uint8_t set)
-{
-    uint8_t v = 0;
-    ESP_RETURN_ON_ERROR(es_rd(reg, &v), TAG, "read 0x%02x failed", reg);
-    return es_wr(reg, (v & keep) | set);
-}
-
-/* ES8311 clocking for MCLK = 256 * fs. Per Espressif's coefficient table, every
- * standard rate uses pre_div 1, x1, adc/dac_div 1, single speed, LRCK div 256,
- * BCLK div 4, adc_osr 0x10; only dac_osr differs (0x20 up to 16 kHz). */
+/* Both codecs run as I2S slaves with MCLK = 256 fs, so the rate set is the same. */
 static bool rate_supported(uint32_t r)
 {
     static const uint32_t rates[] = { 8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000 };
@@ -60,84 +32,11 @@ static bool rate_supported(uint32_t r)
     return false;
 }
 
-static esp_err_t es8311_set_clock(uint32_t rate)
-{
-    esp_err_t r = ESP_OK;
-    r |= es_rmw(0x02, 0x07, 0x00);                         /* pre_div 1, pre_multi x1 */
-    r |= es_wr(0x05, 0x00);                                /* adc_div = dac_div = 1 */
-    r |= es_rmw(0x03, 0x80, 0x10);                         /* single speed, adc_osr */
-    r |= es_rmw(0x04, 0x80, rate <= 16000 ? 0x20 : 0x10);  /* dac_osr */
-    r |= es_rmw(0x07, 0xC0, 0x00);                         /* LRCK div high */
-    r |= es_wr(0x08, 0xFF);                                /* LRCK div low */
-    r |= es_rmw(0x06, 0xE0, 4 - 1);                        /* BCLK div 4 */
-    return r == ESP_OK ? ESP_OK : ESP_FAIL;
-}
-
-static esp_err_t es8311_init(uint32_t sample_rate)
-{
-    uint8_t id1 = 0, id2 = 0;
-    ESP_RETURN_ON_ERROR(es_rd(0xFD, &id1), TAG, "ES8311 not responding at 0x%02x", ES8311_ADDR);
-    es_rd(0xFE, &id2);
-    ESP_LOGI(TAG, "ES8311 chip id %02x%02x", id1, id2);
-
-    esp_err_t r = ESP_OK;
-    /* open: base configuration */
-    r |= es_wr(0x0D, 0xFA);
-    r |= es_wr(0x44, 0x08);              /* I2C noise immunity (written twice on purpose) */
-    r |= es_wr(0x44, 0x08);
-    r |= es_wr(0x01, 0x30);
-    r |= es_wr(0x02, 0x00);
-    r |= es_wr(0x03, 0x10);
-    r |= es_wr(0x16, 0x24);
-    r |= es_wr(0x04, 0x10);
-    r |= es_wr(0x05, 0x00);
-    r |= es_wr(0x0B, 0x00);
-    r |= es_wr(0x0C, 0x00);
-    r |= es_wr(0x10, 0x1F);
-    r |= es_wr(0x11, 0x7F);
-    r |= es_wr(0x00, 0x80);              /* slave mode */
-    r |= es_wr(0x01, 0x3F);              /* MCLK from MCLK pin, not inverted */
-    r |= es_rmw(0x06, (uint8_t)~0x20, 0x00); /* SCLK not inverted */
-    r |= es_wr(0x13, 0x10);
-    r |= es_wr(0x1B, 0x0A);
-    r |= es_wr(0x1C, 0x6A);
-    r |= es_wr(0x44, 0x58);
-
-    /* format: I2S, 16-bit */
-    r |= es_rmw(0x09, 0xFC, 0x0C);
-    r |= es_rmw(0x0A, 0xFC, 0x0C);
-
-    /* sample-rate clocking */
-    r |= es8311_set_clock(sample_rate);
-
-    /* start (DAC path) */
-    r |= es_wr(0x00, 0x80);
-    r |= es_wr(0x01, 0x3F);
-    r |= es_rmw(0x09, 0xBF, 0x00);       /* SDP in: unmute */
-    r |= es_wr(0x17, 0xBF);
-    r |= es_wr(0x0E, 0x02);
-    r |= es_wr(0x12, 0x00);              /* power up DAC */
-    r |= es_wr(0x14, 0x1A);
-    r |= es_wr(0x0D, 0x01);
-    r |= es_wr(0x15, 0x40);
-    r |= es_wr(0x37, 0x08);
-    r |= es_wr(0x45, 0x00);
-    r |= es_rmw(0x31, 0x9F, 0x00);       /* DAC soft-unmute */
-
-    ESP_RETURN_ON_FALSE(r == ESP_OK, ESP_FAIL, TAG, "ES8311 register setup failed");
-    return ESP_OK;
-}
-
 void bsp_audio_set_volume(int percent)
 {
-    if (!s_codec) {
-        return;
+    if (s_codec_ok) {
+        bsp_codec_set_volume(percent < 0 ? 0 : (percent > 100 ? 100 : percent));
     }
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
-    /* Reg 0x32: 0x00 = -95.5 dB, 0xBF = 0 dB, 0.5 dB/step. Map 1..100 % to -47.5..0 dB. */
-    uint8_t reg = percent == 0 ? 0x00 : (uint8_t)(0x5F + (0xBF - 0x5F) * percent / 100);
-    es_wr(0x32, reg);
 }
 
 /* ------------------------------------------------------------------- I2S */
@@ -153,13 +52,12 @@ esp_err_t bsp_audio_init(uint32_t sample_rate)
         ESP_RETURN_ON_FALSE(s_owner, ESP_ERR_NO_MEM, TAG, "mutex alloc failed");
     }
 
+    /* Codec on the shared I2C bus (on the Tab5 this also powers the board up) */
+    i2c_master_bus_handle_t bus = NULL;
+    ESP_RETURN_ON_ERROR(bsp_i2c_init(&bus), TAG, "I2C bus failed");
+
     /* Amp off while the codec comes up, to avoid pops */
-    gpio_config_t pa = {
-        .pin_bit_mask = 1ULL << BSP_AUDIO_PA_GPIO,
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&pa), TAG, "PA gpio failed");
-    gpio_set_level(BSP_AUDIO_PA_GPIO, 0);
+    bsp_audio_amp_set(false);
 
     /* I2S first so MCLK is running when the codec is configured */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
@@ -189,25 +87,15 @@ esp_err_t bsp_audio_init(uint32_t sample_rate)
         return err;
     }
 
-    /* Codec on the shared I2C bus */
-    i2c_master_bus_handle_t bus = NULL;
-    ESP_RETURN_ON_ERROR(bsp_i2c_init(&bus), TAG, "I2C bus failed");
-    if (!s_codec) {
-        i2c_device_config_t dev = {
-            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address = ES8311_ADDR,
-            .scl_speed_hz = ES8311_I2C_HZ,
-        };
-        ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(bus, &dev, &s_codec), TAG, "add ES8311 failed");
-    }
     vTaskDelay(pdMS_TO_TICKS(10));
-    ESP_RETURN_ON_ERROR(es8311_init(sample_rate), TAG, "ES8311 init failed");
+    ESP_RETURN_ON_ERROR(bsp_codec_open(bus, sample_rate), TAG, "codec init failed");
+    s_codec_ok = true;
     bsp_audio_set_volume(70);
 
     s_rate = sample_rate;
 
     vTaskDelay(pdMS_TO_TICKS(20));
-    gpio_set_level(BSP_AUDIO_PA_GPIO, 1);
+    bsp_audio_amp_set(true);
     ESP_LOGI(TAG, "speaker ready, %lu Hz", (unsigned long)sample_rate);
     return ESP_OK;
 }
@@ -228,7 +116,7 @@ esp_err_t bsp_audio_set_sample_rate(uint32_t sample_rate)
     ESP_RETURN_ON_FALSE(rate_supported(sample_rate), ESP_ERR_NOT_SUPPORTED, TAG,
                         "unsupported sample rate %lu", (unsigned long)sample_rate);
 
-    es_rmw(0x31, 0x9F, 0x60);                     /* DAC soft-mute during the switch */
+    bsp_codec_mute(true);                         /* DAC soft-mute during the switch */
     i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
     clk.mclk_multiple = AUDIO_MCLK_MULT;
     esp_err_t err = i2s_channel_disable(s_tx);
@@ -240,9 +128,9 @@ esp_err_t bsp_audio_set_sample_rate(uint32_t sample_rate)
         err = en;
     }
     if (err == ESP_OK) {
-        err = es8311_set_clock(sample_rate);
+        err = bsp_codec_set_rate(sample_rate);
     }
-    es_rmw(0x31, 0x9F, 0x00);                     /* unmute */
+    bsp_codec_mute(false);
     ESP_RETURN_ON_ERROR(err, TAG, "rate switch to %lu failed", (unsigned long)sample_rate);
     s_rate = sample_rate;
     ESP_LOGI(TAG, "sample rate %lu Hz", (unsigned long)sample_rate);
