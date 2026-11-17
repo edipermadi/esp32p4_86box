@@ -89,27 +89,8 @@ void setup()
                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) >> 10));
 }
 
-/* The USB serial link drops on reset, so the boot log is easy to miss:
- * repeat the bring-up report every few seconds. */
-static void print_diag()
-{
-  static char buf[1536];
-  bsp_diag_report(buf, sizeof(buf));
-  Serial.print(buf);
-  Serial.printf("[diag] uptime %lu s, internal RAM %u KB free, PSRAM %u KB free\r\n",
-                (unsigned long)(millis() / 1000),
-                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10),
-                (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) >> 10));
-}
-
 void loop()
 {
-  static uint32_t next_diag = 0;
-  if ((int32_t)(millis() - next_diag) >= 0) {
-    next_diag = millis() + 5000;
-    print_diag();
-  }
-
   uint32_t wait_ms = lv_timer_handler();
   delay(wait_ms < 5 ? 1 : (wait_ms > 20 ? 20 : wait_ms));
 }
